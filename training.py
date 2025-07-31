@@ -9,7 +9,7 @@ from predictive_coding.config import GPTConfig
 from predictive_coding.pc_layer import PCLayer
 from model_architecture.pc_t_model import PCTransformer
 from Data_preprocessing.dataloader import get_loaders
-from utils.model_utils import load_tokenizer, reset_pc_modules
+from utils.model_utils import load_tokenizer, reset_pc_modules, load_best_config
 from utils.pc_utils import cleanup_memory
 from eval import evaluate
 from visualization import plot_metrics
@@ -156,18 +156,18 @@ def main():
    
     config = GPTConfig(
         vocab_size = vocab_size,
-        block_size= 448, 
-        peak_learning_rate= 2e-5,
-        warmup_steps= 217,
-        n_embed=592,
-        dropout= 0.24684719512514441,
-        local_learning_rate= 0.0,
-        T= 10,
+        block_size = best_config["block_size"],
+        peak_learning_rate = best_config["peak_learning_rate"],
+        warmup_steps = best_config["warmup_steps"],
+        n_embed = best_config["n_embed"],
+        dropout = best_config["dropout"],
+        local_learning_rate = 1e-5,
+        T = best_config["T"],
         is_holding_error = True,
-        num_heads=16,
-        n_blocks=6,
-        num_epochs= 20,
-        update_bias= True,
+        num_heads = best_config["num_heads"],
+        n_blocks = best_config["n_blocks"],
+        num_epochs = 20, 
+        update_bias = best_config["update_bias"],
         use_lateral = True,
         internal_energy_fn_name="pc_e",
         output_energy_fn_name="kld",
