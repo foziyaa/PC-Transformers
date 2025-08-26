@@ -32,6 +32,7 @@ def evaluate(model, dataloader, tokenizer, max_batches=None, device = None):
     total_energy = 0.0
     batch_count = 0
     total_ce_loss = 0.0
+    total_tokens = 0
     pad_token_id = tokenizer.pad_token_id
     vocab_size = len(tokenizer)
     
@@ -46,7 +47,10 @@ def evaluate(model, dataloader, tokenizer, max_batches=None, device = None):
             print(f"Evaluating on the full test set...")
         else:
             print(f"Evaluating on up to {max_batches} batches...")
-        
+    # Start timing for throughput calculation
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    throughput_start_time = time.time()
     for batch_idx, batch in enumerate(dataloader):
         if max_batches is not None and batch_idx >= max_batches:
             break
@@ -61,6 +65,16 @@ def evaluate(model, dataloader, tokenizer, max_batches=None, device = None):
         # Clip targets to valid range before using them for loss calculation
         if targets.max() >= vocab_size:
             targets = torch.clamp(targets, max=vocab_size-1)
+         # This represents the actual computational work done in the forward pass
+        if pad_token_id is not None:
+            # Count non-padding tokens in input (what model actually processes)
+            non_pad_mask = (input_ids != pad_token_id)
+            batch_tokens = non_pad_mask.sum().item()
+        else:
+            # If no pad token, count all input tokens
+            batch_tokens = input_ids.numel()
+
+        total_tokens += batch_tokens
 
         logits = model(targets, input_ids)
         ce_loss = F.cross_entropy(
@@ -97,21 +111,25 @@ def evaluate(model, dataloader, tokenizer, max_batches=None, device = None):
             print(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f}")
         reset_pc_modules(model)
         cleanup_memory()
-
+     # End timing for throughput calculation
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    throughput_end_time = time.time()
+    throughput_elapsed_time = throughput_end_time - throughput_start_time
     avg_energy = total_energy / batch_count if batch_count > 0 else 0.0
     avg_ce_loss = total_ce_loss / batch_count if batch_count > 0 else 0.0
     avg_perplexity = math.exp(avg_ce_loss) if avg_ce_loss < 100 else float("inf")
-
+    throughput = total_tokens / throughput_elapsed_time
     
     # if local_rank == 0:
     #     print(f"Total Batches Processed: {batch_idx + 1}")
     #     print(f"Avg CE Loss: {avg_ce_loss:.4f} | Avg Energy: {avg_energy:.4f} | Avg Perplexity: {avg_perplexity:.4f}")
     if not dist.is_initialized() or dist.get_rank() == 0:
         print(f"Total Batches Processed: {batch_idx + 1}")
-        print(f"Avg CE Loss: {avg_ce_loss:.4f} | Avg Energy: {avg_energy:.4f}")
+        print(f"Avg CE Loss: {avg_ce_loss:.4f} | Avg Energy: {avg_energy:.4f} | Avg Perplexity: {avg_perplexity:.4f} | Throughput: {throughput:.2f} tokens/sec")
     
 
-    return avg_energy, avg_perplexity
+    return avg_energy, avg_perplexity,throughput
 
 def main():
     # dist.init_process_group(backend="nccl")

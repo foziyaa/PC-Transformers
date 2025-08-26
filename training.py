@@ -11,6 +11,7 @@ from model_architecture.pc_t_model import PCTransformer
 from Data_preprocessing.dataloader import get_loaders
 from utils.model_utils import load_tokenizer, reset_pc_modules
 from utils.pc_utils import cleanup_memory
+from utils.flop_counter import analyze_model_efficiency, count_flops_manual, format_flops
 from eval import evaluate
 from visualization import plot_metrics
 import torch.distributed as dist
@@ -25,19 +26,12 @@ Usage: torchrun --nproc-per-node=<NUM_GPU> training.py
 
 """
 
-# def setup_ddp():
-#     """Initialize DDP process group"""
-#     dist.init_process_group(backend="nccl")
-#     local_rank = int(os.environ["LOCAL_RANK"])
-#     torch.cuda.set_device(local_rank)
-#     return local_rank
-
-
 def train(model, dataloader, tokenizer, config, global_step, device):
     model.train()
     total_ce_loss = 0.0
     total_energy = 0.0
     batch_count = 0
+    total_tokens = 0
     pad_token_id = tokenizer.pad_token_id
     vocab_size = len(tokenizer)
 
@@ -46,6 +40,11 @@ def train(model, dataloader, tokenizer, config, global_step, device):
 
     alpha = getattr(config, 'combined_internal_weight', 0.3)
     beta = getattr(config, 'combined_output_weight', 0.7)
+    
+    #Start timing for throughput calculation
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    start_time = time.time()
 
     for batch_idx, batch in enumerate(dataloader):
         input_ids = batch["input_ids"].to(device)
@@ -67,6 +66,17 @@ def train(model, dataloader, tokenizer, config, global_step, device):
         global_step += 1
         if target_ids.max() >= vocab_size:
             target_ids = torch.clamp(target_ids, max=vocab_size-1)
+            
+          # Count tokens processed by the model (input tokens)
+        if pad_token_id is not None:
+            # Count non-padding tokens in input (what model actually processes)
+            non_pad_mask = (input_ids != pad_token_id)
+            batch_tokens = non_pad_mask.sum().item()
+        else:
+            # If no pad token, count all input tokens
+            batch_tokens = input_ids.numel()
+
+        total_tokens += batch_tokens
             
         logits = model(target_ids, input_ids)
         ce_loss = F.cross_entropy(
@@ -104,27 +114,25 @@ def train(model, dataloader, tokenizer, config, global_step, device):
 
         perplexity = math.exp(ce_loss.item()) if ce_loss.item() < 100 else float("inf")
 
-        # if dist.get_rank() == 0 and (batch_idx + 1) % 10 == 0:
-        #     print(f"  Batch {batch_idx + 1}/{len(dataloader)} | "
-        #           f"Energy: {batch_energy:.4f} | "
-        #           f"Perplexity: {perplexity:.4f}", flush=True)
         if (not dist.is_initialized() or dist.get_rank() == 0) and (batch_idx + 1) % 10 == 0:
             print(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f} | Perplexity: {perplexity:.4f}")
 
         reset_pc_modules(model)
         cleanup_memory()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    end_time = time.time()
+    elapsed_time = end_time - start_time
 
     avg_energy = total_energy / batch_count if batch_count > 0 else 0.0
     avg_ce_loss = total_ce_loss / batch_count if batch_count > 0 else 0.0
     avg_perplexity = math.exp(avg_ce_loss) if avg_ce_loss < 100 else float("inf")
-
-    return avg_energy, avg_perplexity, global_step
+    throughput = total_tokens / elapsed_time
+    return avg_energy, avg_perplexity, global_step,throughput
 
 
 def main():
-    # local_rank = setup_ddp()
-    # device = torch.device(f"cuda:{local_rank}")
-    # print(f"Using device: {device} (local rank {local_rank})")
+
     local_rank, device, use_ddp = setup_device()
     print(f"Using device: {device} (local rank {local_rank})")
     
@@ -204,6 +212,25 @@ def main():
         total_params = sum(p.numel() for p in model.parameters())
         print(f"{total_params / 1e6:.2f} M parameters", flush=True)
 
+        # FLOP analysis
+        print("\n--- Computational Efficiency Analysis ---")
+        try:
+            # Get the base model (handle DDP)
+            base_model = model.module if hasattr(model, 'module') else model
+            # Analyze with a single sample to get per-sample FLOPs
+            flop_results = count_flops_manual(base_model, (1, config.block_size))
+            print(f"FLOPs per sample: {format_flops(flop_results['flops_per_sample'])}")
+            print(f"FLOPs per epoch (est.): {format_flops(flop_results['flops_per_sample'] * len(train_loader))}")
+
+            if hasattr(config, 'T') and config.T > 1:
+                pc_overhead = flop_results['breakdown']['predictive_coding'] / flop_results['total_flops'] * 100
+                print(f"PC overhead: {pc_overhead:.1f}% (T={config.T} iterations)")
+
+            print(f"Model efficiency: {flop_results['flops_per_sample'] / total_params:.2f} FLOPs/param")
+        except Exception as e:
+            print(f"FLOP analysis failed: {e}")
+        print("---" * 15)
+
     for epoch in range(config.num_epochs):
         if hasattr(train_loader, "sampler") and isinstance(train_loader.sampler, torch.utils.data.DistributedSampler):
             train_loader.sampler.set_epoch(epoch)
@@ -212,21 +239,22 @@ def main():
             print(f"Epoch {epoch + 1}/{config.num_epochs}")
 
         model.train()
-        train_energy, train_perplexity, global_step = train(
+        train_energy, train_perplexity, global_step, throughput = train(
             model, train_loader, tokenizer, config, global_step, device
         )
         train_energies.append(train_energy)
 
         model.eval()
-        val_energy, val_perplexity = evaluate(
+        val_energy, val_perplexity,throughput = evaluate(
             model, valid_loader, tokenizer, max_batches=None, device=device
         )
+        
         val_energies.append(val_energy)
 
         if rank == 0:
             print(f"Epoch {epoch + 1}/{config.num_epochs} | "
                   f"Train Energy: {train_energy:.4f} | Train Perplexity: {train_perplexity:.4f} | "
-                  f"Val Energy: {val_energy:.4f} | Val Perplexity: {val_perplexity:.4f}")
+                  f"Val Energy: {val_energy:.4f} | Val Perplexity: {val_perplexity:.4f}| Throughput: {throughput:.2f} tokens/sec")
 
             if (epoch + 1) % 5 == 0 or epoch == config.num_epochs - 1:
                 os.makedirs("checkpoints", exist_ok=True)

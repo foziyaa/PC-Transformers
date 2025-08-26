@@ -25,7 +25,7 @@ Usage:  torchrun --nproc-per-node=<NUM_GPU> tuning/bayes_tuning.py
 
 """
 
-def run_tuning(n_trials=30, study_name="bayesian_tuning", local_rank=0, device=None, flash=False):
+def run_tuning(n_trials=3, study_name="bayesian_tuning", local_rank=0, device=None, flash=False):
     """Run clean dynamic hyperparameter tuning"""
     storage_url = f"sqlite:///tuning/{study_name}.db"
     # if local_rank == 0 or local_rank == -1:
@@ -70,9 +70,10 @@ def run_tuning(n_trials=30, study_name="bayesian_tuning", local_rank=0, device=N
     # if local_rank == 0 or local_rank == -1:
     if local_rank == 0:
         trials_path = initialize_logs(study_name)
-        logger.info(f"[Rank {local_rank}] Starting Bayesian tuning with {n_trials} trials")
-        logger.info(f"[Rank {local_rank}] Trials Log: {trials_path}")
-
+        # logger.info(f"[Rank {local_rank}] Starting Bayesian tuning with {n_trials} trials")
+        # logger.info(f"[Rank {local_rank}] Trials Log: {trials_path}")
+    logger.info(f"[Rank {local_rank}] Starting Bayesian tuning with {n_trials} trials")
+    logger.info(f"[Rank {local_rank}] Trials Log: {trials_path}")
     try:
         study.optimize(lambda trial: objective(trial, device, flash), n_trials=n_trials, show_progress_bar=(local_rank == 0))
         logger.info(f"[Rank {local_rank}] Bayesian tuning completed!")
@@ -133,7 +134,7 @@ if __name__ == "__main__":
     
     
     # train_loader, valid_loader,_ = get_loaders((local_rank >= 0))
-    study = run_tuning(n_trials= 30, study_name="bayesian_tuning", local_rank=local_rank, device=device, flash=args.flash)
+    study = run_tuning(n_trials= 3, study_name="bayesian_tuning", local_rank=local_rank, device=device, flash=args.flash)
 
     # if dist.is_initialized():
     #     dist.destroy_process_group()
