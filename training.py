@@ -187,6 +187,7 @@ def main():
         combined_output_weight=0.7,
         use_flash_attention=True  
     )
+    
     model = PCTransformer(config).to(device)
 
 
