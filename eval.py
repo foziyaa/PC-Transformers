@@ -129,7 +129,7 @@ def evaluate(model, dataloader, tokenizer, max_batches=None, device = None):
         print(f"Avg CE Loss: {avg_ce_loss:.4f} | Avg Energy: {avg_energy:.4f} | Avg Perplexity: {avg_perplexity:.4f} | Throughput: {throughput:.2f} tokens/sec")
     
 
-    return avg_energy, avg_perplexity,throughput
+    return avg_energy, avg_perplexity
 
 def main():
     # dist.init_process_group(backend="nccl")
