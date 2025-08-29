@@ -54,11 +54,9 @@ def run_tuning(n_trials=3, study_name="bayesian_tuning", local_rank=0, device=No
 
    
     if local_rank == 0:
-        summary_path,trials_path = initialize_logs(study_name)
-    else:
-        summary_path = f"tuning/{study_name}_summary.txt"
-    logger.info(f"[Rank {local_rank}] Starting Bayesian tuning with {n_trials} trials")
-    logger.info(f"[Rank {local_rank}] Trials Log: {trials_path}")
+        trials_path = initialize_logs(study_name)
+        logger.info(f"[Rank {local_rank}] Starting Bayesian tuning with {n_trials} trials")
+        logger.info(f"[Rank {local_rank}] Trials Log: {trials_path}")
 
     try:
         study.optimize(lambda trial: objective(trial, device, flash), n_trials=n_trials, show_progress_bar=(local_rank == 0))
