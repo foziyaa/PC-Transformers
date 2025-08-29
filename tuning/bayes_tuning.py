@@ -28,21 +28,6 @@ Usage:  torchrun --nproc-per-node=<NUM_GPU> tuning/bayes_tuning.py
 def run_tuning(n_trials=3, study_name="bayesian_tuning", local_rank=0, device=None, flash=False):
     """Run clean dynamic hyperparameter tuning"""
     storage_url = f"sqlite:///tuning/{study_name}.db"
-    # if local_rank == 0 or local_rank == -1:
-    #     _ = optuna.create_study(
-    #         direction='minimize',
-    #         study_name=study_name,
-    #         storage=storage_url,
-    #         load_if_exists=True,
-    #         sampler=optuna.samplers.TPESampler(seed=42),
-    #         pruner=optuna.pruners.MedianPruner(
-    #             n_startup_trials=5,
-    #             n_warmup_steps=3,
-    #             interval_steps=1
-    #         )
-    #     )
-    # if dist.is_initialized():
-    #     dist.barrier()
     if local_rank == 0:
         try:
             _ = optuna.create_study(
@@ -67,11 +52,11 @@ def run_tuning(n_trials=3, study_name="bayesian_tuning", local_rank=0, device=No
         storage=storage_url
     )
 
-    # if local_rank == 0 or local_rank == -1:
+   
     if local_rank == 0:
-        trials_path = initialize_logs(study_name)
-        # logger.info(f"[Rank {local_rank}] Starting Bayesian tuning with {n_trials} trials")
-        # logger.info(f"[Rank {local_rank}] Trials Log: {trials_path}")
+        summary_path,trials_path = initialize_logs(study_name)
+    else:
+        summary_path = f"tuning/{study_name}_summary.txt"
     logger.info(f"[Rank {local_rank}] Starting Bayesian tuning with {n_trials} trials")
     logger.info(f"[Rank {local_rank}] Trials Log: {trials_path}")
     try:
