@@ -128,7 +128,7 @@ def train(model, dataloader, tokenizer, config, global_step, device):
     avg_ce_loss = total_ce_loss / batch_count if batch_count > 0 else 0.0
     avg_perplexity = math.exp(avg_ce_loss) if avg_ce_loss < 100 else float("inf")
     throughput = total_tokens / elapsed_time
-    return avg_energy, avg_perplexity, global_step,throughput
+    return avg_energy, avg_perplexity, global_step
 
 
 def main():
@@ -240,13 +240,13 @@ def main():
             print(f"Epoch {epoch + 1}/{config.num_epochs}")
 
         model.train()
-        train_energy, train_perplexity, global_step, throughput = train(
+        train_energy, train_perplexity, global_step = train(
             model, train_loader, tokenizer, config, global_step, device
         )
         train_energies.append(train_energy)
 
         model.eval()
-        val_energy, val_perplexity,throughput = evaluate(
+        val_energy, val_perplexity = evaluate(
             model, valid_loader, tokenizer, max_batches=None, device=device
         )
         
