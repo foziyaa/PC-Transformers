@@ -17,8 +17,7 @@ Usage: torchrun --nproc-per-node=<NUM_GPU> generate_text.py
 
 """
 
-# local_rank = int(os.getenv("LOCAL_RANK", 0))
-# device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+
 local_rank, device, use_ddp = setup_device()
 def generate_text(model, config, input_ids, max_new_tokens, temperature, device = None):
     model.eval()
@@ -73,7 +72,7 @@ def text_generation(model, config, device = None,  max_samples=2):
             decoded_preds.append(generated_str)
             decoded_targets.append(target_str)
 
-            # if local_rank == 0:
+            
             if not dist.is_initialized() or dist.get_rank() == 0:
                 print(f"\n[Batch {batch_idx + 1}, Sample {i + 1}]")
                 print(f"[PROMPT ]: {prompt_str}")
@@ -88,8 +87,7 @@ def text_generation(model, config, device = None,  max_samples=2):
     return decoded_preds, decoded_targets
 
 def main():
-    # dist.init_process_group(backend="nccl")
-    # print(f"[Rank {local_rank}] Using device: {device}")
+   
     parser = argparse.ArgumentParser()
     parser.add_argument('--flash', action='store_true', help='Enable FlashAttention for attention layers')
     args = parser.parse_args()
@@ -100,7 +98,7 @@ def main():
     print(f"[Rank {local_rank}] Using device: {device}")
     tokenizer = load_tokenizer()
     vocab_size = len(tokenizer)
-    #gpu
+    
     config = GPTConfig(
         vocab_size = vocab_size,
         block_size=448,
@@ -119,36 +117,12 @@ def main():
         use_flash_attention=args.flash
     )
     
-    #cpu
-    # config = GPTConfig(
-    #     vocab_size = vocab_size,
-    #     block_size= 256, 
-    #     peak_learning_rate= 2e-5,
-    #     warmup_steps= 217,
-    #     n_embed=64,
-    #     dropout= 0.24684719512514441,
-    #     local_learning_rate= 0.0,
-    #     T= 1,
-    #     is_holding_error = True,
-    #     num_heads=1,
-    #     n_blocks=1,
-    #     num_epochs= 1,
-    #     update_bias= True,
-    #     use_lateral = True,
-    #     internal_energy_fn_name="mse",
-    #     output_energy_fn_name="kld",
-    #     eos_token_id=tokenizer.eos_token_id,
-    #     combined_internal_weight=0.3,
-    #     combined_output_weight=0.7,
-    #     use_flash_attention=True  
-    # )
     model_path = "checkpoints/final_model.pt"
     model = load_model(model_path, config)
     model = model.to(device)
     if use_ddp:
         model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
-    # if local_rank == 0:
     if not dist.is_initialized() or dist.get_rank() == 0:
         decoded_preds, decoded_targets = text_generation(model, config, device, max_samples=2)
         if decoded_preds and decoded_targets and local_rank == 0:
