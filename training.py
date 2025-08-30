@@ -11,7 +11,6 @@ from model_architecture.pc_t_model import PCTransformer
 from Data_preprocessing.dataloader import get_loaders
 from utils.model_utils import load_tokenizer, reset_pc_modules
 from utils.pc_utils import cleanup_memory
-from utils.flop_counter import analyze_model_efficiency, count_flops_manual, format_flops
 from eval import evaluate
 from visualization import plot_metrics
 import torch.distributed as dist
