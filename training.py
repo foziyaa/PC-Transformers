@@ -67,16 +67,6 @@ def train(model, dataloader, tokenizer, config, global_step, device):
         if target_ids.max() >= vocab_size:
             target_ids = torch.clamp(target_ids, max=vocab_size-1)
             
-          # Count tokens processed by the model (input tokens)
-        if pad_token_id is not None:
-            # Count non-padding tokens in input (what model actually processes)
-            non_pad_mask = (input_ids != pad_token_id)
-            batch_tokens = non_pad_mask.sum().item()
-        else:
-            # If no pad token, count all input tokens
-            batch_tokens = input_ids.numel()
-
-        total_tokens += batch_tokens
             
         logits = model(target_ids, input_ids)
         ce_loss = F.cross_entropy(
@@ -107,7 +97,6 @@ def train(model, dataloader, tokenizer, config, global_step, device):
 
         avg_internal_energy = sum(internal_energies) / len(internal_energies) if internal_energies else ce_loss.item()
         avg_output_energy = output_energy if output_energy is not None else ce_loss.item()
-
         batch_energy = alpha * avg_internal_energy +beta* avg_output_energy
         total_energy += batch_energy
         batch_count += 1
@@ -119,15 +108,11 @@ def train(model, dataloader, tokenizer, config, global_step, device):
 
         reset_pc_modules(model)
         cleanup_memory()
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    end_time = time.time()
-    elapsed_time = end_time - start_time
+    
 
     avg_energy = total_energy / batch_count if batch_count > 0 else 0.0
     avg_ce_loss = total_ce_loss / batch_count if batch_count > 0 else 0.0
     avg_perplexity = math.exp(avg_ce_loss) if avg_ce_loss < 100 else float("inf")
-    throughput = total_tokens / elapsed_time
     return avg_energy, avg_perplexity, global_step
 
 
@@ -141,7 +126,7 @@ def main():
 
     tokenizer = load_tokenizer()
     vocab_size = len(tokenizer)
-    #gpu
+   
     config = GPTConfig(
         vocab_size = vocab_size,
         block_size= 448, 
@@ -164,33 +149,8 @@ def main():
         combined_output_weight=0.7,
         use_flash_attention=True  
     )
-    #cpu
-    # config = GPTConfig(
-    #     vocab_size = vocab_size,
-    #     block_size= 256, 
-    #     peak_learning_rate= 2e-5,
-    #     warmup_steps= 217,
-    #     n_embed=64,
-    #     dropout= 0.24684719512514441,
-    #     local_learning_rate= 0.0,
-    #     T= 1,
-    #     is_holding_error = True,
-    #     num_heads=1,
-    #     n_blocks=1,
-    #     num_epochs= 1,
-    #     update_bias= True,
-    #     use_lateral = True,
-    #     internal_energy_fn_name="mse",
-    #     output_energy_fn_name="kld",
-    #     eos_token_id=tokenizer.eos_token_id,
-    #     combined_internal_weight=0.3,
-    #     combined_output_weight=0.7,
-    #     use_flash_attention=True  
-    # )
     
     model = PCTransformer(config).to(device)
-
-
     if use_ddp:
         model = DDP(model, device_ids=[local_rank], 
                     output_device=local_rank, 
@@ -208,29 +168,8 @@ def main():
     rank = dist.get_rank() if dist.is_initialized() else 0
     if rank == 0:
         print("========== Training started ==========", flush=True)
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
         total_params = sum(p.numel() for p in model.parameters())
         print(f"{total_params / 1e6:.2f} M parameters", flush=True)
-
-        # FLOP analysis
-        print("\n--- Computational Efficiency Analysis ---")
-        try:
-            # Get the base model (handle DDP)
-            base_model = model.module if hasattr(model, 'module') else model
-            # Analyze with a single sample to get per-sample FLOPs
-            flop_results = count_flops_manual(base_model, (1, config.block_size))
-            print(f"FLOPs per sample: {format_flops(flop_results['flops_per_sample'])}")
-            print(f"FLOPs per epoch (est.): {format_flops(flop_results['flops_per_sample'] * len(train_loader))}")
-
-            if hasattr(config, 'T') and config.T > 1:
-                pc_overhead = flop_results['breakdown']['predictive_coding'] / flop_results['total_flops'] * 100
-                print(f"PC overhead: {pc_overhead:.1f}% (T={config.T} iterations)")
-
-            print(f"Model efficiency: {flop_results['flops_per_sample'] / total_params:.2f} FLOPs/param")
-        except Exception as e:
-            print(f"FLOP analysis failed: {e}")
-        print("---" * 15)
 
     for epoch in range(config.num_epochs):
         if hasattr(train_loader, "sampler") and isinstance(train_loader.sampler, torch.utils.data.DistributedSampler):
@@ -287,8 +226,6 @@ def main():
             'val_perplexity': val_perplexity
         }
         torch.save(final_checkpoint, 'checkpoints/final_model.pt')
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
         total_time = time.time() - start_time
         print(f"\nTraining completed in {total_time:.2f} seconds")
         print("Final model saved to: checkpoints/final_model.pt")
