@@ -31,7 +31,6 @@ def train(model, dataloader, tokenizer, config, global_step, device):
     total_ce_loss = 0.0
     total_energy = 0.0
     batch_count = 0
-    total_tokens = 0
     pad_token_id = tokenizer.pad_token_id
     vocab_size = len(tokenizer)
 
@@ -41,10 +40,6 @@ def train(model, dataloader, tokenizer, config, global_step, device):
     alpha = getattr(config, 'combined_internal_weight', 0.3)
     beta = getattr(config, 'combined_output_weight', 0.7)
     
-    #Start timing for throughput calculation
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    start_time = time.time()
 
     for batch_idx, batch in enumerate(dataloader):
         input_ids = batch["input_ids"].to(device)
@@ -194,7 +189,7 @@ def main():
         if rank == 0:
             print(f"Epoch {epoch + 1}/{config.num_epochs} | "
                   f"Train Energy: {train_energy:.4f} | Train Perplexity: {train_perplexity:.4f} | "
-                  f"Val Energy: {val_energy:.4f} | Val Perplexity: {val_perplexity:.4f}| Throughput: {throughput:.2f} tokens/sec")
+                  f"Val Energy: {val_energy:.4f} | Val Perplexity: {val_perplexity:.4f}")
 
             if (epoch + 1) % 5 == 0 or epoch == config.num_epochs - 1:
                 os.makedirs("checkpoints", exist_ok=True)

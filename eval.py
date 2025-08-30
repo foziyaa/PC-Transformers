@@ -20,11 +20,6 @@ Usage: torchrun --nproc-per-node=<NUM_GPU> eval.py
 
 """
 
-# local_rank = int(os.getenv("LOCAL_RANK", 0))
-# device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
-
-# local_rank = int(os.getenv("LOCAL_RANK", 0))
-# device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
 local_rank, device, use_ddp = setup_device()
 
 def evaluate(model, dataloader, tokenizer, max_batches=None, device = None):
@@ -32,7 +27,6 @@ def evaluate(model, dataloader, tokenizer, max_batches=None, device = None):
     total_energy = 0.0
     batch_count = 0
     total_ce_loss = 0.0
-    total_tokens = 0
     pad_token_id = tokenizer.pad_token_id
     vocab_size = len(tokenizer)
     
@@ -107,7 +101,7 @@ def evaluate(model, dataloader, tokenizer, max_batches=None, device = None):
 
     if not dist.is_initialized() or dist.get_rank() == 0:
         print(f"Total Batches Processed: {batch_idx + 1}")
-        print(f"Avg CE Loss: {avg_ce_loss:.4f} | Avg Energy: {avg_energy:.4f} | Avg Perplexity: {avg_perplexity:.4f} | Throughput: {throughput:.2f} tokens/sec")
+        print(f"Avg CE Loss: {avg_ce_loss:.4f} | Avg Energy: {avg_energy:.4f} | Avg Perplexity: {avg_perplexity:.4f}")
     
 
     return avg_energy, avg_perplexity
