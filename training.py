@@ -15,7 +15,7 @@ from eval import evaluate
 from visualization import plot_metrics
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-
+from utils.device_utils import setup_device, cleanup_memory
 
 """
 This script trains the predictive coding transformer model on the provided dataset.
@@ -24,14 +24,6 @@ It tracks and plots the average predictive coding energy per epoch and saves the
 Usage: torchrun --nproc-per-node=<NUM_GPU> training.py
 
 """
-
-def setup_ddp():
-    """Initialize DDP process group"""
-    dist.init_process_group(backend="nccl")
-    local_rank = int(os.environ["LOCAL_RANK"])
-    torch.cuda.set_device(local_rank)
-    return local_rank
-
 
 def train(model, dataloader, tokenizer, config, global_step, device):
     model.train()
@@ -46,6 +38,7 @@ def train(model, dataloader, tokenizer, config, global_step, device):
 
     alpha = getattr(config, 'combined_internal_weight', 0.3)
     beta = getattr(config, 'combined_output_weight', 0.7)
+    
 
     for batch_idx, batch in enumerate(dataloader):
         input_ids = batch["input_ids"].to(device)
@@ -67,6 +60,7 @@ def train(model, dataloader, tokenizer, config, global_step, device):
         global_step += 1
         if target_ids.max() >= vocab_size:
             target_ids = torch.clamp(target_ids, max=vocab_size-1)
+            
             
         logits = model(target_ids, input_ids)
         ce_loss = F.cross_entropy(
@@ -97,36 +91,36 @@ def train(model, dataloader, tokenizer, config, global_step, device):
 
         avg_internal_energy = sum(internal_energies) / len(internal_energies) if internal_energies else ce_loss.item()
         avg_output_energy = output_energy if output_energy is not None else ce_loss.item()
-
         batch_energy = alpha * avg_internal_energy +beta* avg_output_energy
         total_energy += batch_energy
         batch_count += 1
 
         perplexity = math.exp(ce_loss.item()) if ce_loss.item() < 100 else float("inf")
 
-        if dist.get_rank() == 0 and (batch_idx + 1) % 10 == 0:
-            print(f"  Batch {batch_idx + 1}/{len(dataloader)} | "
-                  f"Energy: {batch_energy:.4f} | "
-                  f"Perplexity: {perplexity:.4f}", flush=True)
+        if (not dist.is_initialized() or dist.get_rank() == 0) and (batch_idx + 1) % 10 == 0:
+            print(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f} | Perplexity: {perplexity:.4f}")
 
         reset_pc_modules(model)
         cleanup_memory()
+    
 
     avg_energy = total_energy / batch_count if batch_count > 0 else 0.0
     avg_ce_loss = total_ce_loss / batch_count if batch_count > 0 else 0.0
     avg_perplexity = math.exp(avg_ce_loss) if avg_ce_loss < 100 else float("inf")
-
     return avg_energy, avg_perplexity, global_step
 
 
 def main():
-    local_rank = setup_ddp()
-    device = torch.device(f"cuda:{local_rank}")
+
+    local_rank, device, use_ddp = setup_device()
     print(f"Using device: {device} (local rank {local_rank})")
+    
+    if use_ddp and not dist.is_initialized():
+        dist.init_process_group(backend="nccl")
 
     tokenizer = load_tokenizer()
     vocab_size = len(tokenizer)
-
+   
     config = GPTConfig(
         vocab_size = vocab_size,
         block_size= 448, 
@@ -149,18 +143,22 @@ def main():
         combined_output_weight=0.7,
         use_flash_attention=True  
     )
-
+    
     model = PCTransformer(config).to(device)
-    model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
-    model.module.register_all_lateral_weights()
+    if use_ddp:
+        model = DDP(model, device_ids=[local_rank], 
+                    output_device=local_rank, 
+                    find_unused_parameters=True)
 
-    train_loader, valid_loader, _ = get_loaders(distributed=True)
+        model.module.register_all_lateral_weights()
 
-    start_time = time.time()
+    train_loader, valid_loader, _ = get_loaders(distributed=use_ddp)
+    
+    
     global_step = 0
     train_energies = []
     val_energies = []
-
+    start_time = time.time()
     rank = dist.get_rank() if dist.is_initialized() else 0
     if rank == 0:
         print("========== Training started ==========", flush=True)
@@ -184,6 +182,7 @@ def main():
         val_energy, val_perplexity = evaluate(
             model, valid_loader, tokenizer, max_batches=None, device=device
         )
+        
         val_energies.append(val_energy)
 
         if rank == 0:
@@ -193,9 +192,11 @@ def main():
 
             if (epoch + 1) % 5 == 0 or epoch == config.num_epochs - 1:
                 os.makedirs("checkpoints", exist_ok=True)
+                # Get the underlying model (handle both DDP and non-DDP cases)
+                model_to_save = model.module if hasattr(model, 'module') else model
                 checkpoint = {
                     'epoch': epoch,
-                    'model_state_dict': model.module.state_dict(),
+                    'model_state_dict': model_to_save.state_dict(),
                     'train_energy': train_energy,
                     'val_energy': val_energy,
                     'train_perplexity': train_perplexity,
@@ -208,22 +209,25 @@ def main():
     if rank == 0:
         plot_metrics(train_energies, val_energies)
         os.makedirs("checkpoints", exist_ok=True)
+        # Get the underlying model (handle both DDP and non-DDP cases)
+        model_to_save = model.module if hasattr(model, 'module') else model
         final_checkpoint = {
             'epoch': config.num_epochs,
-            'model_state_dict': model.module.state_dict(),
+            'model_state_dict': model_to_save.state_dict(),
             'train_energy': train_energy,
             'val_energy': val_energy,
             'train_perplexity': train_perplexity,
             'val_perplexity': val_perplexity
         }
         torch.save(final_checkpoint, 'checkpoints/final_model.pt')
-
         total_time = time.time() - start_time
         print(f"\nTraining completed in {total_time:.2f} seconds")
         print("Final model saved to: checkpoints/final_model.pt")
         print("========== Training completed ==========")
 
-    dist.destroy_process_group()
+    # dist.destroy_process_group()
+    if use_ddp and dist.is_initialized():
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

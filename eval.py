@@ -11,7 +11,8 @@ from utils.model_utils import load_tokenizer, load_model, reset_pc_modules
 from utils.pc_utils import cleanup_memory
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
-
+from utils.device_utils import setup_device, cleanup_memory
+import argparse
 """
 This script evaluates the performance of the predictive coding transformer model.
 
@@ -19,11 +20,7 @@ Usage: torchrun --nproc-per-node=<NUM_GPU> eval.py
 
 """
 
-local_rank = int(os.getenv("LOCAL_RANK", 0))
-device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
-
-local_rank = int(os.getenv("LOCAL_RANK", 0))
-device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+local_rank, device, use_ddp = setup_device()
 
 def evaluate(model, dataloader, tokenizer, max_batches=None, device = None):
     model.eval()
@@ -44,7 +41,7 @@ def evaluate(model, dataloader, tokenizer, max_batches=None, device = None):
             print(f"Evaluating on the full test set...")
         else:
             print(f"Evaluating on up to {max_batches} batches...")
-        
+   
     for batch_idx, batch in enumerate(dataloader):
         if max_batches is not None and batch_idx >= max_batches:
             break
@@ -59,6 +56,7 @@ def evaluate(model, dataloader, tokenizer, max_batches=None, device = None):
         # Clip targets to valid range before using them for loss calculation
         if targets.max() >= vocab_size:
             targets = torch.clamp(targets, max=vocab_size-1)
+       
 
         logits = model(targets, input_ids)
         ce_loss = F.cross_entropy(
@@ -89,29 +87,39 @@ def evaluate(model, dataloader, tokenizer, max_batches=None, device = None):
         total_energy += batch_energy
         batch_count += 1
 
-        if dist.get_rank() == 0 and (batch_idx + 1) % 10 == 0:
-            print(f"  Batch {batch_idx + 1}/{len(dataloader)} | CE Loss: {ce_loss.item():.4f}| Energy: { batch_energy:.4f}", flush=True)
-
+        if (not dist.is_initialized() or dist.get_rank() == 0) and (batch_idx + 1) % 10 == 0:
+            print(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f}")
+        
         reset_pc_modules(model)
         cleanup_memory()
-
+   
     avg_energy = total_energy / batch_count if batch_count > 0 else 0.0
     avg_ce_loss = total_ce_loss / batch_count if batch_count > 0 else 0.0
     avg_perplexity = math.exp(avg_ce_loss) if avg_ce_loss < 100 else float("inf")
-
+  
     
-    if local_rank == 0:
+
+    if not dist.is_initialized() or dist.get_rank() == 0:
         print(f"Total Batches Processed: {batch_idx + 1}")
         print(f"Avg CE Loss: {avg_ce_loss:.4f} | Avg Energy: {avg_energy:.4f} | Avg Perplexity: {avg_perplexity:.4f}")
+    
 
     return avg_energy, avg_perplexity
 
 def main():
-    dist.init_process_group(backend="nccl")
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--flash', action='store_true', help='Enable FlashAttention for attention layers')
+    args = parser.parse_args()
+
+    if use_ddp and not dist.is_initialized():
+        dist.init_process_group(backend="nccl")
+
     print(f"[Rank {local_rank}] Using device: {device}")
 
     tokenizer = load_tokenizer()
     vocab_size = len(tokenizer)
+    
     config = GPTConfig(
         vocab_size = vocab_size,
         block_size=448,
@@ -131,22 +139,24 @@ def main():
         combined_output_weight=0.7,
         use_flash_attention=True
     )
-
+  
     model_path = "checkpoints/final_model.pt"
     model = load_model(model_path, config)
     model = model.to(device)
-    model = DDP(model, device_ids=[local_rank], output_device=local_rank)
-    _, _, test_loader = get_loaders(distributed = True)
+    if use_ddp:
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+    _, _, test_loader = get_loaders(distributed = use_ddp)
 
     # Max batches can be set to limit evaluation, or None for full dataset
     start_time = time.time()
     evaluate(model, test_loader, tokenizer, max_batches= None, device=device)
     elapsed = time.time() - start_time
-    if local_rank == 0:
-        print(f"Evaluation completed in {elapsed:.2f} seconds")
+    if not dist.is_initialized() or dist.get_rank() == 0:
+        print(f"Evaluation completed in {elapsed:.2f} seconds")  
         
-    dist.barrier()
-    dist.destroy_process_group()
+    if use_ddp and dist.is_initialized(): 
+        dist.barrier()
+        dist.destroy_process_group()
 
 if __name__ == "__main__":
     main()

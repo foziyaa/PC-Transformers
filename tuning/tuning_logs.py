@@ -2,13 +2,13 @@ def initialize_logs(study_name: str):
     """Create and initialize summary and trial log files."""
     trials_path = f"tuning/{study_name}_trials.txt"
 
+
     with open(trials_path, "w") as f:
         f.write(f"DETAILED TRIAL RESULTS - {study_name}\n")
         f.write(f"{'='*50}\n")
         f.write("Objective: Minimize Averge Energy \n\n")
 
     return trials_path
-
 def log_trial_to_detailed_log(trials_path, trial, config, trial_time, avg_energy, write_header=False):
     """Appends trial information in tabular format to a trials log file."""
     with open(trials_path, "a") as f:
