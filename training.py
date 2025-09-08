@@ -169,7 +169,16 @@ def main():
         combined_output_weight=0.7,
         use_flash_attention=True  
     )
-    
+    # record the model hyperparameters configurations
+    if rank == 0:
+        logger.info("Saving the hyperparameters configurations:")
+        try:
+            cfg = config.__dict__
+        except Exception:
+            cfg = {k: getattr(config, k) for k in dir(config) if not k.startswith("_") and not callable(getattr(config, k))}
+        config_json = json.dumps(cfg, indent=6, default=str)
+        logger.info(config_json)
+
     model = PCTransformer(config).to(device)
     if use_ddp:
         model = DDP(model, device_ids=[local_rank], 
