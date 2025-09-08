@@ -16,6 +16,8 @@ from visualization import plot_metrics
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from utils.device_utils import setup_device, cleanup_memory
+import json
+import logging
 
 """
 This script trains the predictive coding transformer model on the provided dataset.
@@ -111,15 +113,13 @@ def train(model, dataloader, tokenizer, config, global_step, device):
 
 
 def main():
-
     local_rank, device, use_ddp = setup_device()
-    print(f"Using device: {device} (local rank {local_rank})")
-    
     if use_ddp and not dist.is_initialized():
         dist.init_process_group(backend="nccl")
 
     tokenizer = load_tokenizer()
     vocab_size = len(tokenizer)
+    rank = dist.get_rank() if dist.is_initialized() else 0
    
     config = GPTConfig(
         vocab_size = vocab_size,
@@ -159,7 +159,6 @@ def main():
     train_energies = []
     val_energies = []
     start_time = time.time()
-    rank = dist.get_rank() if dist.is_initialized() else 0
     if rank == 0:
         print("========== Training started ==========", flush=True)
         total_params = sum(p.numel() for p in model.parameters())
