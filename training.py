@@ -120,6 +120,32 @@ def main():
     tokenizer = load_tokenizer()
     vocab_size = len(tokenizer)
     rank = dist.get_rank() if dist.is_initialized() else 0
+
+    # Configure logging
+    log_dir = 'logs'
+    os.makedirs(log_dir, exist_ok=True)
+
+    # build handlers and remove existing ones
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    for h in list(root_logger.handlers):
+        root_logger.removeHandler(h)
+
+    fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    stream_h = logging.StreamHandler()
+    stream_h.setFormatter(fmt)
+    root_logger.addHandler(stream_h)
+
+    if rank == 0:
+        file_h = logging.FileHandler(os.path.join(log_dir, "training.log"), mode="a")
+        file_h.setFormatter(fmt)
+        root_logger.addHandler(file_h)
+
+    logger = logging.getLogger(__name__)
+    
+    if rank == 0:
+        logger.info(f"\n{'#' * 120}") 
+        logger.info(f"Using device: {device} (local rank {local_rank})")
    
     config = GPTConfig(
         vocab_size = vocab_size,
