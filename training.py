@@ -27,7 +27,7 @@ Usage: torchrun --nproc-per-node=<NUM_GPU> training.py
 
 """
 
-def train(model, dataloader, tokenizer, config, global_step, device):
+def train(model, dataloader, tokenizer, config, global_step, device, logger):
     model.train()
     total_ce_loss = 0.0
     total_energy = 0.0
@@ -100,7 +100,7 @@ def train(model, dataloader, tokenizer, config, global_step, device):
         perplexity = math.exp(ce_loss.item()) if ce_loss.item() < 100 else float("inf")
 
         if (not dist.is_initialized() or dist.get_rank() == 0) and (batch_idx + 1) % 10 == 0:
-            print(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f} | Perplexity: {perplexity:.4f}")
+            logger.info(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f} | Perplexity: {perplexity:.4f}")
 
         reset_pc_modules(model)
         cleanup_memory()
@@ -189,26 +189,24 @@ def main():
 
     train_loader, valid_loader, _ = get_loaders(distributed=use_ddp)
     
-    
     global_step = 0
     train_energies = []
     val_energies = []
     start_time = time.time()
     if rank == 0:
-        print("========== Training started ==========", flush=True)
-        total_params = sum(p.numel() for p in model.parameters())
-        print(f"{total_params / 1e6:.2f} M parameters", flush=True)
+        logger.info("========== Training started ==========") 
+        logger.info(f"{sum(p.numel() for p in model.parameters())/1e6:.2f} M parameters")
 
     for epoch in range(config.num_epochs):
         if hasattr(train_loader, "sampler") and isinstance(train_loader.sampler, torch.utils.data.DistributedSampler):
             train_loader.sampler.set_epoch(epoch)
 
         if rank == 0:
-            print(f"Epoch {epoch + 1}/{config.num_epochs}")
+            logger.info(f"Epoch {epoch + 1}/{config.num_epochs}")
 
         model.train()
         train_energy, train_perplexity, global_step = train(
-            model, train_loader, tokenizer, config, global_step, device
+            model, train_loader, tokenizer, config, global_step, device, logger
         )
         train_energies.append(train_energy)
 
@@ -220,7 +218,7 @@ def main():
         val_energies.append(val_energy)
 
         if rank == 0:
-            print(f"Epoch {epoch + 1}/{config.num_epochs} | "
+            logger.info(f"Epoch {epoch + 1}/{config.num_epochs} | "
                   f"Train Energy: {train_energy:.4f} | Train Perplexity: {train_perplexity:.4f} | "
                   f"Val Energy: {val_energy:.4f} | Val Perplexity: {val_perplexity:.4f}")
 
@@ -238,7 +236,7 @@ def main():
                 }
                 checkpoint_path = f'checkpoints/model_epoch_{epoch+1}.pt'
                 torch.save(checkpoint, checkpoint_path)
-                print(f"Saved checkpoint to {checkpoint_path}")
+                logger.info(f"Saved checkpoint to {checkpoint_path}")
 
     if rank == 0:
         plot_metrics(train_energies, val_energies)
@@ -255,9 +253,9 @@ def main():
         }
         torch.save(final_checkpoint, 'checkpoints/final_model.pt')
         total_time = time.time() - start_time
-        print(f"\nTraining completed in {total_time:.2f} seconds")
-        print("Final model saved to: checkpoints/final_model.pt")
-        print("========== Training completed ==========")
+        logger.info(f"Training completed in {total_time:.2f} seconds")
+        logger.info("Final model saved to: checkpoints/final_model.pt")
+        logger.info("========== Training completed ==========")
 
     # dist.destroy_process_group()
     if use_ddp and dist.is_initialized():
