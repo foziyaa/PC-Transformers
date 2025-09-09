@@ -79,8 +79,11 @@ def train(model, dataloader, tokenizer, config, global_step, device):
                 if energy is None or (isinstance(energy, float) and math.isnan(energy)):
                     continue
 
-                if module is output_pc_layer:
-                    output_energy = energy
+                if hasattr(module, 'layer_type') and module.layer_type == 'linear_output':
+                    if getattr(module, 'energy_fn_name', None) == "kld":
+                        output_energy = energy
+                    else:
+                        internal_energies.append(energy)
                 else:
                     internal_energies.append(energy)
 
@@ -90,8 +93,12 @@ def train(model, dataloader, tokenizer, config, global_step, device):
                     _ = module._head_similarity_max
 
         avg_internal_energy = sum(internal_energies) / len(internal_energies) if internal_energies else ce_loss.item()
-        avg_output_energy = output_energy if output_energy is not None else ce_loss.item()
-        batch_energy = alpha * avg_internal_energy +beta* avg_output_energy
+                
+        if output_energy is not None:
+           avg_output_energy = output_energy
+           batch_energy = alpha * avg_internal_energy + beta* avg_output_energy 
+        else:
+            batch_energy = avg_internal_energy
         total_energy += batch_energy
         batch_count += 1
 
@@ -136,7 +143,7 @@ def main():
         num_epochs= 20,
         update_bias= True,
         use_lateral = True,
-        internal_energy_fn_name="mse",
+        internal_energy_fn_name="pc_e",
         output_energy_fn_name="kld",
         eos_token_id=tokenizer.eos_token_id,
         combined_internal_weight=0.3,
