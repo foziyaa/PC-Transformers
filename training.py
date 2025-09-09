@@ -16,6 +16,8 @@ from visualization import plot_metrics
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from utils.device_utils import setup_device, cleanup_memory
+import json
+import logging
 
 """
 This script trains the predictive coding transformer model on the provided dataset.
@@ -25,7 +27,7 @@ Usage: torchrun --nproc-per-node=<NUM_GPU> training.py
 
 """
 
-def train(model, dataloader, tokenizer, config, global_step, device):
+def train(model, dataloader, tokenizer, config, global_step, device, logger):
     model.train()
     total_ce_loss = 0.0
     total_energy = 0.0
@@ -105,7 +107,7 @@ def train(model, dataloader, tokenizer, config, global_step, device):
         perplexity = math.exp(ce_loss.item()) if ce_loss.item() < 100 else float("inf")
 
         if (not dist.is_initialized() or dist.get_rank() == 0) and (batch_idx + 1) % 10 == 0:
-            print(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f} | Perplexity: {perplexity:.4f}")
+            logger.info(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f} | Perplexity: {perplexity:.4f}")
 
         reset_pc_modules(model)
         cleanup_memory()
@@ -118,15 +120,39 @@ def train(model, dataloader, tokenizer, config, global_step, device):
 
 
 def main():
-
     local_rank, device, use_ddp = setup_device()
-    print(f"Using device: {device} (local rank {local_rank})")
-    
     if use_ddp and not dist.is_initialized():
         dist.init_process_group(backend="nccl")
 
     tokenizer = load_tokenizer()
     vocab_size = len(tokenizer)
+    rank = dist.get_rank() if dist.is_initialized() else 0
+
+    # Configure logging
+    log_dir = 'logs'
+    os.makedirs(log_dir, exist_ok=True)
+
+    # build handlers and remove existing ones
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    for h in list(root_logger.handlers):
+        root_logger.removeHandler(h)
+
+    fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    stream_h = logging.StreamHandler()
+    stream_h.setFormatter(fmt)
+    root_logger.addHandler(stream_h)
+
+    if rank == 0:
+        file_h = logging.FileHandler(os.path.join(log_dir, "training.log"), mode="a")
+        file_h.setFormatter(fmt)
+        root_logger.addHandler(file_h)
+
+    logger = logging.getLogger(__name__)
+    
+    if rank == 0:
+        logger.info(f"\n{'#' * 120}") 
+        logger.info(f"Using device: {device} (local rank {local_rank})")
    
     config = GPTConfig(
         vocab_size = vocab_size,
@@ -150,7 +176,16 @@ def main():
         combined_output_weight=0.7,
         use_flash_attention=True  
     )
-    
+    # record the model hyperparameters configurations
+    if rank == 0:
+        logger.info("Saving the hyperparameters configurations:")
+        try:
+            cfg = config.__dict__
+        except Exception:
+            cfg = {k: getattr(config, k) for k in dir(config) if not k.startswith("_") and not callable(getattr(config, k))}
+        config_json = json.dumps(cfg, indent=6, default=str)
+        logger.info(config_json)
+
     model = PCTransformer(config).to(device)
     if use_ddp:
         model = DDP(model, device_ids=[local_rank], 
@@ -161,27 +196,24 @@ def main():
 
     train_loader, valid_loader, _ = get_loaders(distributed=use_ddp)
     
-    
     global_step = 0
     train_energies = []
     val_energies = []
     start_time = time.time()
-    rank = dist.get_rank() if dist.is_initialized() else 0
     if rank == 0:
-        print("========== Training started ==========", flush=True)
-        total_params = sum(p.numel() for p in model.parameters())
-        print(f"{total_params / 1e6:.2f} M parameters", flush=True)
+        logger.info("========== Training started ==========") 
+        logger.info(f"{sum(p.numel() for p in model.parameters())/1e6:.2f} M parameters")
 
     for epoch in range(config.num_epochs):
         if hasattr(train_loader, "sampler") and isinstance(train_loader.sampler, torch.utils.data.DistributedSampler):
             train_loader.sampler.set_epoch(epoch)
 
         if rank == 0:
-            print(f"Epoch {epoch + 1}/{config.num_epochs}")
+            logger.info(f"Epoch {epoch + 1}/{config.num_epochs}")
 
         model.train()
         train_energy, train_perplexity, global_step = train(
-            model, train_loader, tokenizer, config, global_step, device
+            model, train_loader, tokenizer, config, global_step, device, logger
         )
         train_energies.append(train_energy)
 
@@ -193,7 +225,7 @@ def main():
         val_energies.append(val_energy)
 
         if rank == 0:
-            print(f"Epoch {epoch + 1}/{config.num_epochs} | "
+            logger.info(f"Epoch {epoch + 1}/{config.num_epochs} | "
                   f"Train Energy: {train_energy:.4f} | Train Perplexity: {train_perplexity:.4f} | "
                   f"Val Energy: {val_energy:.4f} | Val Perplexity: {val_perplexity:.4f}")
 
@@ -211,7 +243,7 @@ def main():
                 }
                 checkpoint_path = f'checkpoints/model_epoch_{epoch+1}.pt'
                 torch.save(checkpoint, checkpoint_path)
-                print(f"Saved checkpoint to {checkpoint_path}")
+                logger.info(f"Saved checkpoint to {checkpoint_path}")
 
     if rank == 0:
         plot_metrics(train_energies, val_energies)
@@ -228,9 +260,9 @@ def main():
         }
         torch.save(final_checkpoint, 'checkpoints/final_model.pt')
         total_time = time.time() - start_time
-        print(f"\nTraining completed in {total_time:.2f} seconds")
-        print("Final model saved to: checkpoints/final_model.pt")
-        print("========== Training completed ==========")
+        logger.info(f"Training completed in {total_time:.2f} seconds")
+        logger.info("Final model saved to: checkpoints/final_model.pt")
+        logger.info("========== Training completed ==========")
 
     # dist.destroy_process_group()
     if use_ddp and dist.is_initialized():
