@@ -210,11 +210,16 @@ def step_attn(t, T, target, x, W_latents, proj_layers, layer_type, local_lr, cla
             Q = Q.view(batch_size, num_heads, seq_len, head_dim)
             K = K.view(batch_size, num_heads, seq_len, head_dim)
             V = V.view(batch_size, num_heads, seq_len, head_dim)
+            
+            #create causal mask (1=keep, 0=mask)
+            causal_mask = torch.tril(torch.ones(seq_len, seq_len, device=device)).unsqueeze(0).unsqueeze(0)
 
+            # !! Causal Mask
             if flash:
+                # TODO: add support for causal masking in flash attention
                 mu_heads = apply_flash_attention(Q, K, V)
             else:
-                mu_heads = apply_standard_attention(Q, K, V)
+                mu_heads = apply_standard_attention(Q, K, V, mask=causal_mask)
 
             dvl_grad = compute_DVL(mu_heads, requires_update)
             if dvl_grad is not None:
