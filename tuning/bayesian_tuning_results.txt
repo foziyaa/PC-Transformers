@@ -1,0 +1,28 @@
+COMBINED ENERGY OPTIMIZATION RESULTS
+====================================
+
+Best combined energy: 8.2924
+CE Loss: 8.2904
+Raw Energy: 0.0020
+Normalized Energy: 0.0020
+Combined Energy: 8.2924
+
+Best Configuration:
+vocab_size: 4000
+block_size: 256
+peak_learning_rate: 0.0006870706728235172
+warmup_steps: 2
+la: 0.5
+n_embed: 64
+dropout: 0.11081845099183116
+local_learning_rate: 1e-7
+T: 2
+is_holding_error: True
+update_bias: False
+num_heads: 2
+n_blocks: 2
+batch_size: 2
+num_epochs: 2
+use_lateral: True
+eos_token_id: 0
+use_flash_attention: False
