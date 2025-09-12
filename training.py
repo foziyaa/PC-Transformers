@@ -100,7 +100,10 @@ def train(model, dataloader, tokenizer, config, global_step, device, logger):
         perplexity = math.exp(ce_loss.item()) if ce_loss.item() < 100 else float("inf")
 
         if (not dist.is_initialized() or dist.get_rank() == 0) and (batch_idx + 1) % 10 == 0:
-            logger.info(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f} | Perplexity: {perplexity:.4f}")
+            if logger:
+                logger.info(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f} | Perplexity: {perplexity:.4f}")
+            else:
+                print(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f} | Perplexity: {perplexity:.4f}")
 
         reset_pc_modules(model)
         cleanup_memory()
@@ -149,17 +152,17 @@ def main():
    
     config = GPTConfig(
         vocab_size = vocab_size,
-        block_size= 448, 
+        block_size= 1, 
         peak_learning_rate= 2e-5,
-        warmup_steps= 217,
-        n_embed=592,
+        warmup_steps= 1,
+        n_embed=2,
         dropout= 0.24684719512514441,
         local_learning_rate= 0.0,
-        T= 10,
+        T= 1,
         is_holding_error = True,
-        num_heads=16,
-        n_blocks=6,
-        num_epochs= 20,
+        num_heads=1,
+        n_blocks=1,
+        num_epochs= 1,
         update_bias= True,
         use_lateral = True,
         internal_energy_fn_name="mse",
@@ -167,7 +170,7 @@ def main():
         eos_token_id=tokenizer.eos_token_id,
         combined_internal_weight=0.3,
         combined_output_weight=0.7,
-        use_flash_attention=True  
+        use_flash_attention=False  
     )
     # record the model hyperparameters configurations
     if rank == 0:
