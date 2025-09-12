@@ -29,7 +29,7 @@ def get_loaders(distributed: bool = False):
         sampler=train_sampler,
         shuffle=(train_sampler is None),  
         num_workers=Config.num_workers,
-        pin_memory=True,                            
+        pin_memory=False,                            
         collate_fn=lambda batch: pad_collate_fn(batch, pad_token_id),
         persistent_workers=Config.num_workers > 0,
         drop_last=True
@@ -40,7 +40,7 @@ def get_loaders(distributed: bool = False):
         sampler=valid_sampler, 
         shuffle = False,
         num_workers=Config.num_workers,
-        pin_memory=True,
+        pin_memory=False,
         collate_fn=lambda batch: pad_collate_fn(batch, pad_token_id),
         persistent_workers=Config.num_workers > 0
     )
@@ -50,7 +50,7 @@ def get_loaders(distributed: bool = False):
         sampler=test_sampler,
         shuffle = False,
         num_workers=Config.num_workers,
-        pin_memory=True,
+        pin_memory=False,
         collate_fn=lambda batch: pad_collate_fn(batch, pad_token_id),
         persistent_workers=Config.num_workers > 0)
 

@@ -14,3 +14,4 @@ bert-score==0.3.13
 optuna
 psutil==7.0.0
 torch==2.5.0
+numpy

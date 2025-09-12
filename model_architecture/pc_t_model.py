@@ -4,7 +4,7 @@ from .embedding import Embedding_Layer
 from .transformer_block import TransformerBlock
 from utils.pc_utils import ids_to_one_hot
 from .output import OutputLayer
-
+from utils.device_utils import create_streams_or_futures, execute_parallel, synchronize_execution
 
 class PCTransformer(nn.Module):
     """
@@ -48,7 +48,7 @@ class PCTransformer(nn.Module):
 
     def forward(self, target_ids, input_ids):
         """
-        Forward pass of the PCTransformer model.
+        Forward pass of the PCTransformer model, using device-specific parallelism (CUDA streams or torch.jit.fork).
 
         Args:
             target_ids (torch.Tensor): Target token IDs of shape (B, T).
@@ -78,9 +78,10 @@ class PCTransformer(nn.Module):
         target_logits = ids_to_one_hot(target_ids, vocab_size).to(device)
         position_ids = torch.arange(S, device=input_ids.device).unsqueeze(0).expand(B, S)
 
+        # Initialize all predictive coding layers
         self.embedding.pc_layer.init_x(
             batch_size=B,
-            seq_len= S,
+            seq_len=S,
             layer={"word": self.embedding.word_embeddings, "pos": self.embedding.position_embeddings},
             layer_type="embed",
             input_ids=input_ids,
@@ -100,7 +101,7 @@ class PCTransformer(nn.Module):
                 batch_size=B,
                 seq_len=S,
                 layer=block.attn.output,
-                layer_type="linear",
+                layer_type="linear_attn",
                 device=device
             )
             block.mlp.pc_layer1.init_x(
@@ -114,84 +115,125 @@ class PCTransformer(nn.Module):
                 batch_size=B,
                 seq_len=S,
                 layer=block.mlp.fc2,
-                layer_type="linear",
+                layer_type="fc2",
                 device=device
             )
         self.output.pc_layer.init_x(
             batch_size=B,
             seq_len=S,
             layer=self.output.output,
-            layer_type="linear",
+            layer_type="linear_output",
             device=device
         )
 
+        # Initialize streams or futures for parallel execution
+        use_cuda, streams_or_futures = create_streams_or_futures(device, len(self.blocks) * 4 + 2)
+
         for t in range(self.config.T):
-            futures = []
-            futures.append(torch.jit.fork(
+            # Execute output layer
+            td_mlp2 = self.blocks[-1].mlp.pc_layer2.get_td_err("fc2") if t > 0 else None
+            execute_parallel(
+                use_cuda,
+                streams_or_futures,
                 self.output.pc_layer.forward,
                 target_activity=target_logits,
                 layer=self.output.output,
-                layer_type="linear",
+                layer_type="linear_output",
                 t=t,
                 T=self.config.T,
-                requires_update=self.training
-            ))
-            
+                requires_update=self.training,
+                td_err= td_mlp2  #it's preferable to make the td error None for the output layer 
+            )
+
+            # Iterate through blocks in reverse order for parallel execution
             for idx in range(len(self.blocks) - 1, -1, -1):
                 block = self.blocks[idx]
                 next_target = (
                     self.blocks[idx + 1].attn.pc_qkv.get_x("attn")
                     if idx < len(self.blocks) - 1
-                    else self.output.pc_layer.get_x("linear")
+                    else self.output.pc_layer.get_x("linear_output")
                 )
                 
-                layer_norm2 = block.ln2(next_target)
-                
-                futures.append(torch.jit.fork(
+                layer_norm2 = (block.ln2
+                   if idx < len(self.blocks) - 1
+                    else None)
+                td_mlp1 = block.mlp.pc_layer1.get_td_err("fc1") if t > 0 else None
+
+                # Execute MLP layer 2
+                execute_parallel(
+                    use_cuda,
+                    streams_or_futures,
                     block.mlp.pc_layer2.forward,
-                    target_activity=layer_norm2,
+                    target_activity=next_target,
                     layer=block.mlp.fc2,
-                    layer_type="linear",
+                    layer_type="fc2",
                     t=t,
                     T=self.config.T,
-                    requires_update=self.training
-                ))
+                    requires_update=self.training,
+                    td_err= td_mlp1,
+                    layer_norm=layer_norm2
+                )
+                td_attn_op = block.attn.pc_output.get_td_err("linear_attn") if t > 0 else None
 
-                futures.append(torch.jit.fork(
+                # Execute MLP layer 1
+                execute_parallel(
+                    use_cuda,
+                    streams_or_futures,
                     block.mlp.pc_layer1.forward,
-                    target_activity=block.mlp.pc_layer2.get_x("linear"),
+                    target_activity=block.mlp.pc_layer2.get_x("fc2"),
                     layer=block.mlp.fc1,
                     layer_type="fc1",
                     t=t,
                     T=self.config.T,
-                    requires_update=self.training
-                ))
+                    requires_update=self.training,
+                    td_err= td_attn_op,
+                    layer_norm=block.ln1
+                )
                 
-                layer_norm1 = block.ln1(block.mlp.pc_layer1.get_x("fc1"))
-                    
-                futures.append(torch.jit.fork(
+                if idx == 0:
+                   td_embed = self.embedding.pc_layer.get_td_err("embed") if t > 0 else None
+                else:
+                   td_embed = self.blocks[idx - 1].mlp.pc_layer2.get_td_err("fc2") if t > 0 else None
+                
+                td_attn_qkv = block.attn.pc_qkv.get_td_err("attn") if t > 0 else None
+
+    
+                # Execute attention output
+                execute_parallel(
+                    use_cuda,
+                    streams_or_futures,
                     block.attn.pc_output.forward,
-                    target_activity=layer_norm1,
+                    target_activity=block.mlp.pc_layer1.get_x("fc1"),
                     layer=block.attn.output,
-                    layer_type="linear",
+                    layer_type="linear_attn",
                     t=t,
                     T=self.config.T,
-                    requires_update=self.training
-                ))
+                    requires_update=self.training,
+                    td_err= td_attn_qkv,
+                    layer_norm=block.ln1
+                )
 
-                futures.append(torch.jit.fork(
+                # Execute attention QKV
+                execute_parallel(
+                    use_cuda,
+                    streams_or_futures,
                     block.attn.pc_qkv.forward,
-                    target_activity=block.attn.pc_output.get_x("linear"),
+                    target_activity=block.attn.pc_output.get_x("linear_attn"),
                     proj_layers={"q_proj": block.attn.q, "k_proj": block.attn.k, "v_proj": block.attn.v},
                     layer_type="attn",
                     t=t,
                     T=self.config.T,
                     requires_update=self.training,
-                    flash= getattr(self.config, 'use_flash_attention', False)
-                ))
+                    td_err= td_embed,
+                    flash=getattr(self.config, 'use_flash_attention', False),
+                    layer_norm=block.ln2
+            
+                )
 
-
-            futures.append(torch.jit.fork(
+            # Execute embedding layer
+            execute_parallel(
+                use_cuda,
+                streams_or_futures,
                 self.embedding.pc_layer.forward,
                 target_activity=self.blocks[0].attn.pc_qkv.get_x("attn"),
                 layer={"word": self.embedding.word_embeddings, "pos": self.embedding.position_embeddings},
@@ -200,16 +242,12 @@ class PCTransformer(nn.Module):
                 position_ids=position_ids,
                 t=t,
                 T=self.config.T,
-                requires_update=self.training
-            ))
+                requires_update=self.training,
+                layer_norm= block.ln2
+            )
 
-            # Wait for all concurrent inference steps to complete
-            for future in futures:
-                try:
-                    torch.jit.wait(future)
-                except Exception as e:
-                    print(f"Error in parallel inference step: {e}")
-
-        output_x = self.output.pc_layer.get_x("linear")
-        logits = output_x @ self.output.output.weight.T + self.output.output.bias
+            # Synchronize all parallel tasks
+            synchronize_execution(use_cuda, streams_or_futures)
+        logits = self.output.pc_layer.get_mu("linear_output")
         return logits
+    
