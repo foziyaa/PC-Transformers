@@ -75,15 +75,22 @@ def evaluate(model, dataloader, tokenizer, max_batches=None, device = None):
                 if energy is None or (isinstance(energy, float) and math.isnan(energy)):
                     continue
 
-                if module is output_pc_layer:
-                    output_energy = energy
-                else:
+                if hasattr(module, 'layer_type') and module.layer_type == 'linear_output':
+                    if getattr(module, 'energy_fn_name', None) == "kld":
+                        output_energy = energy
+                    else:
+                        internal_energies.append(energy)
+                else: 
                     internal_energies.append(energy)
 
         avg_internal_energy = sum(internal_energies) / len(internal_energies) if internal_energies else ce_loss.item()
-        avg_output_energy = output_energy if output_energy is not None else ce_loss.item()
+                
+        if output_energy is not None:
+           avg_output_energy = output_energy
+           batch_energy = alpha * avg_internal_energy + beta* avg_output_energy 
+        else:
+            batch_energy = avg_internal_energy
 
-        batch_energy = alpha * avg_internal_energy + beta * avg_output_energy
         total_energy += batch_energy
         batch_count += 1
 
@@ -132,8 +139,8 @@ def main():
         n_blocks=6,
         num_epochs=1,
         update_bias=False,
-        internal_energy_fn_name="mse", 
-        output_energy_fn_name="kld",
+        internal_energy_fn_name="pc_e", 
+        output_energy_fn_name="pc_e",
         eos_token_id = tokenizer.eos_token_id,
         combined_internal_weight=0.3,
         combined_output_weight=0.7,
