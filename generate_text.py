@@ -107,14 +107,15 @@ def main():
         block_size = best_config["block_size"],
         n_embed = best_config["n_embed"],
         dropout = best_config["dropout"],
-        local_learning_rate = 1e-5,
+        local_learning_rate = best_config["peak_learning_rate"],
         T = best_config["T"],
         is_holding_error = True,
         num_heads = best_config["num_heads"],
         n_blocks = best_config["n_blocks"],
         num_epochs = 1,
+        internal_energy_fn_name="pc_e",
+        output_energy_fn_name="kld",
         update_bias = best_config["update_bias"],
-        energy_fn_name = best_config["energy_fn_name"],
         eos_token_id = tokenizer.eos_token_id
     )
     
