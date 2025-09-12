@@ -9,8 +9,7 @@ def load_best_config():
 
     selected_keys = {
         "block_size", "peak_learning_rate", "warmup_steps", "n_embed",
-        "dropout", "T", "num_heads", "n_blocks",
-        "energy_fn_name", "update_bias"
+        "dropout", "T", "num_heads", "n_blocks", "update_bias"
     }
 
     fallback_values = {
@@ -22,7 +21,6 @@ def load_best_config():
         "T": 15,
         "num_heads": 8,
         "n_blocks": 4,
-        "energy_fn_name": "mse",
         "update_bias": False
     }
 
