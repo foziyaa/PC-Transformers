@@ -142,7 +142,7 @@ class PCTransformer(nn.Module):
                 t=t,
                 T=self.config.T,
                 requires_update=self.training,
-                td_err= td_mlp2
+                td_err= td_mlp2  #it's preferable to make the td error None for the output layer 
             )
 
             # Iterate through blocks in reverse order for parallel execution
@@ -154,6 +154,9 @@ class PCTransformer(nn.Module):
                     else self.output.pc_layer.get_x("linear_output")
                 )
                 
+                layer_norm2 = (block.ln2
+                   if idx < len(self.blocks) - 1
+                    else None)
                 td_mlp1 = block.mlp.pc_layer1.get_td_err("fc1") if t > 0 else None
 
                 # Execute MLP layer 2
@@ -168,6 +171,7 @@ class PCTransformer(nn.Module):
                     T=self.config.T,
                     requires_update=self.training,
                     td_err= td_mlp1,
+                    layer_norm=layer_norm2
                 )
                 td_attn_op = block.attn.pc_output.get_td_err("linear_attn") if t > 0 else None
 
@@ -183,6 +187,7 @@ class PCTransformer(nn.Module):
                     T=self.config.T,
                     requires_update=self.training,
                     td_err= td_attn_op,
+                    layer_norm=block.ln1
                 )
                 
                 if idx == 0:
@@ -205,6 +210,7 @@ class PCTransformer(nn.Module):
                     T=self.config.T,
                     requires_update=self.training,
                     td_err= td_attn_qkv,
+                    layer_norm=block.ln1
                 )
 
                 # Execute attention QKV
@@ -220,6 +226,7 @@ class PCTransformer(nn.Module):
                     requires_update=self.training,
                     td_err= td_embed,
                     flash=getattr(self.config, 'use_flash_attention', False),
+                    layer_norm=block.ln2
             
                 )
 
@@ -236,12 +243,11 @@ class PCTransformer(nn.Module):
                 t=t,
                 T=self.config.T,
                 requires_update=self.training,
+                layer_norm= block.ln2
             )
 
             # Synchronize all parallel tasks
             synchronize_execution(use_cuda, streams_or_futures)
-
-        output_x = self.output.pc_layer.get_x("linear_output")
-        logits = output_x @ self.output.output.weight.T + self.output.output.bias
+        logits = self.output.pc_layer.get_mu("linear_output")
         return logits
     

@@ -41,7 +41,7 @@ def get_head_similarity(mu_heads):
 def x_init(batch_size: int, seq_len: int, embedding_size: int, device: torch.device = None) -> torch.Tensor:
     return torch.randn(batch_size, seq_len, embedding_size, device = device)
 
-def step_embed(t, T, target, layer, layer_type, input_ids, position_ids, local_lr, clamp_value, energy_fn_name, is_holding_error, requires_update, mu_word_cache=None, mu_pos_cache=None):
+def step_embed(t, T, target, layer, layer_type, input_ids, position_ids, local_lr, clamp_value, energy_fn_name, is_holding_error, requires_update, layer_norm, mu_word_cache=None, mu_pos_cache=None):
     """
     Perform a predictive coding update step for the embedding layer.
     Now supports vectorized updates and caching of mu_word/mu_pos for inference.
@@ -86,7 +86,9 @@ def step_embed(t, T, target, layer, layer_type, input_ids, position_ids, local_l
             mu_word = mu_word_cache
             mu_pos = mu_pos_cache
         mu = mu_word + mu_pos
-        error = target - mu
+        mu_norm=layer_norm(mu)
+    
+        error = target - mu_norm
         if not requires_update:
             if t == T - 1:
                 finalize_step(mu, target, mu - mu, t, layer_type, energy_fn_name, is_holding_error)
@@ -109,7 +111,7 @@ def step_embed(t, T, target, layer, layer_type, input_ids, position_ids, local_l
   
     return mu, mu_word, mu_pos, error
     
-def step_linear(t, T, target, x, layer, W_latents, layer_type, local_lr, clamp_value, use_lateral, is_holding_error, energy_fn_name, update_bias, requires_update, td_err):
+def step_linear(t, T, target, x, layer, W_latents, layer_type, local_lr, clamp_value, use_lateral, is_holding_error, energy_fn_name, update_bias, requires_update, td_err, layer_norm):
     """
     Perform a predictive coding update step for a linear (fully connected) layer.
 
@@ -138,27 +140,33 @@ def step_linear(t, T, target, x, layer, W_latents, layer_type, local_lr, clamp_v
     autocast_ctx = autocast('cuda') if use_amp else nullcontext()
     
     with autocast_ctx:
+        if layer_norm is not None and layer_type == "fc1":
+           x = layer_norm(x)
+        elif layer_type == "fc2":
+           x = F.gelu(x)
+           
         mu = layer(x)
         if layer_type == "fc1":
             mu = F.gelu(mu)
-    
-        bu_err = target - mu
-        
+        elif layer_norm is not None and layer_type in ["linear_attn", "fc2"]:
+              mu = layer_norm(mu)
+        if layer_type=="linear_output":
+          bu_err= target - F.softmax(mu, dim=-1) 
+        else:    
+          bu_err = target - mu 
+          
+        error_proj= bu_err @layer.weight # project the error 
+       
         if td_err is not None:
-           td_err= td_err @layer.weight.T # project the error 
-           error= bu_err- td_err
+           error= error_proj- td_err
         else:
-           error= bu_err     
-        
-        if layer.weight.shape[0] != layer.weight.shape[1]:
-           error_proj = torch.einsum("bsh, vh -> bsv", error, layer.weight.T)  
-        else:
-           error_proj = error  
+           error= error_proj     
+          
 
         if use_lateral and layer_type in W_latents:
            W_latent = W_latents[layer_type].to(device) 
            x_latent = torch.einsum("bsh,hv->bsv", x, W_latent)
-           delta_x = error_proj + x_latent
+           delta_x = error + x_latent
            x = x + local_lr * delta_x
 
            if requires_update:
@@ -187,9 +195,10 @@ def step_linear(t, T, target, x, layer, W_latents, layer_type, local_lr, clamp_v
 
     return x, mu, bu_err
 
-def step_attn(t, T, target, x, W_latents, proj_layers, layer_type, local_lr, clamp_value, use_lateral, is_holding_error, energy_fn_name, update_bias, requires_update, layer_instance, num_heads, n_embed, la, td_err, flash=False):
+def step_attn(t, T, target, x, W_latents, proj_layers, layer_type, local_lr, clamp_value, use_lateral, is_holding_error, energy_fn_name, update_bias, requires_update, layer_instance, num_heads, n_embed, la, td_err,layer_norm, flash=False):
         assert proj_layers is not None, "proj_layers dict is required for attention"
         device = x.device
+        x=layer_norm(x)
         q_proj = proj_layers.get("q_proj", None)
         k_proj = proj_layers.get("k_proj", None)
         v_proj = proj_layers.get("v_proj", None)
