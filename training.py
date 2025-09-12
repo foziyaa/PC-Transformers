@@ -152,10 +152,6 @@ def main():
         root_logger.addHandler(file_h)
 
     logger = logging.getLogger(__name__)
-    
-    if rank == 0:
-        logger.info(f"\n{'#' * 120}") 
-        logger.info(f"Using device: {device} (local rank {local_rank})")
    
     config = GPTConfig(
         vocab_size = vocab_size,
@@ -180,14 +176,16 @@ def main():
         use_flash_attention=True  
     )
     
-    # Create a separate logger for hyperparameters (file only)
+    # Create a separate logger for hyperparameters
     param_logger = logging.getLogger('param_logger')
     param_logger.setLevel(logging.INFO)
     if rank == 0 and root_logger.handlers:
         param_logger.addHandler(root_logger.handlers[1])
-        param_logger.propagate = False  # Prevent propagation to console
+        param_logger.propagate = False
 
     if rank == 0:
+        param_logger.info(f"\n{'#' * 120}") 
+        logger.info(f"Using device: {device} (local rank {local_rank})")
         try:
             cfg = config.__dict__
         except Exception:
