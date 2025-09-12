@@ -152,35 +152,42 @@ def main():
    
     config = GPTConfig(
         vocab_size = vocab_size,
-        block_size= 1, 
-        peak_learning_rate= 2e-5,
-        warmup_steps= 1,
-        n_embed=2,
+        block_size= 448, 
+        peak_learning_rate= 5e-4,
+        warmup_steps= 217,
+        n_embed=12,
         dropout= 0.24684719512514441,
-        local_learning_rate= 0.0,
-        T= 1,
+        local_learning_rate= 0.001,
+        T= 10,
         is_holding_error = True,
-        num_heads=1,
-        n_blocks=1,
-        num_epochs= 1,
+        num_heads=6,
+        n_blocks=4,
+        num_epochs= 20,
         update_bias= True,
         use_lateral = True,
-        internal_energy_fn_name="mse",
-        output_energy_fn_name="kld",
+        internal_energy_fn_name="pc_e",
+        output_energy_fn_name="pc_e",
         eos_token_id=tokenizer.eos_token_id,
-        combined_internal_weight=0.3,
-        combined_output_weight=0.7,
-        use_flash_attention=False  
+        combined_internal_weight=0.7,
+        combined_output_weight=0.3,
+        use_flash_attention=True
     )
-    # record the model hyperparameters configurations
+    
+    # Create a separate logger for hyperparameters (file only)
+    param_logger = logging.getLogger('param_logger')
+    param_logger.setLevel(logging.INFO)
+    if rank == 0 and root_logger.handlers:
+        param_logger.addHandler(root_logger.handlers[1])
+        param_logger.propagate = False  # Prevent propagation to console
+
     if rank == 0:
-        logger.info("Saving the hyperparameters configurations:")
         try:
             cfg = config.__dict__
         except Exception:
             cfg = {k: getattr(config, k) for k in dir(config) if not k.startswith("_") and not callable(getattr(config, k))}
         config_json = json.dumps(cfg, indent=6, default=str)
-        logger.info(config_json)
+        param_logger.info("Saving the hyperparameters configurations:")
+        param_logger.info(config_json)
 
     model = PCTransformer(config).to(device)
     if use_ddp:
