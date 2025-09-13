@@ -29,7 +29,7 @@ def get_dynamic_model_config(trial, vocab_size, flash=False):
         warmup_steps=warmup_steps,
         n_embed=n_embed,
         dropout=dropout,
-        local_learning_rate=0.0, 
+        local_learning_rate=1e-5, 
         T=T,
         is_holding_error=True,
         num_heads=num_heads,
@@ -37,8 +37,8 @@ def get_dynamic_model_config(trial, vocab_size, flash=False):
         num_epochs=3,
         update_bias=update_bias,
         use_lateral=True,
-        internal_energy_fn_name="mse",
-        output_energy_fn_name="kld",
+        internal_energy_fn_name="pc_e",
+        output_energy_fn_name="pc_e",
         use_flash_attention=flash
     )
 

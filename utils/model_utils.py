@@ -9,6 +9,7 @@ from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
 from torch.nn.utils.rnn import pad_sequence
 import torch
 from torch.amp import autocast
+import re
 
 def pad_collate_fn(batch, pad_token_id=0):
     input_seqs = [item["input_ids"] for item in batch]
@@ -74,4 +75,6 @@ def decode_ids(tokenizer, ids, stop_at_eos = True):
     if stop_at_eos and "[EOS]" in text:
         text = text.split("[EOS]")[0].strip()
     return text
+
+
 
