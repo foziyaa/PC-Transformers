@@ -54,6 +54,6 @@ def apply_standard_attention(q, k, v, mask=None):
         attn_scores = torch.matmul(q, k.transpose(-2, -1)) / (q.size(-1) ** 0.5)
         if mask is not None:
             attn_scores = attn_scores.masked_fill(mask == 0, float('-inf'))
-        attn_weights = torch.softmax(attn_scores, dim=-1)
+        attn_weights = torch.softmax(attn_scores.float(), dim=-1).to(q.dtype)
         attn_output = torch.matmul(attn_weights, v)
     return attn_output
