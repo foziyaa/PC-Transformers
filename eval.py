@@ -143,8 +143,10 @@ def main():
         num_epochs = 1,
         internal_energy_fn_name="pc_e",
         output_energy_fn_name="kld",
-        update_bias = best_config["update_bias"],
-        eos_token_id = tokenizer.eos_token_id
+        eos_token_id = tokenizer.eos_token_id,
+        combined_internal_weight=0.3,
+        combined_output_weight=0.7,
+        update_bias = best_config["update_bias"]        
     )
   
     model_path = "checkpoints/final_model.pt"

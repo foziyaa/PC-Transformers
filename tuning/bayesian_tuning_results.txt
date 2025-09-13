@@ -15,7 +15,7 @@ warmup_steps: 217
 la: 0.5
 n_embed: 12
 dropout: 0.24684719512514441
-local_learning_rate: 0.0
+local_learning_rate: 1e-5
 T: 10
 is_holding_error: True
 update_bias: False
