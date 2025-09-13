@@ -71,7 +71,7 @@ def objective(trial, device = None, flash=False):
             return float("inf")
 
         model.train()
-        train(model, train_loader, tokenizer, config, global_step = 0, device = device)
+        train(model, train_loader, tokenizer, config, global_step = 0, device = device, logger=None)
         reset_pc_modules(model)
 
         model.eval()

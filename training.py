@@ -107,7 +107,10 @@ def train(model, dataloader, tokenizer, config, global_step, device, logger):
         perplexity = math.exp(ce_loss.item()) if ce_loss.item() < 100 else float("inf")
 
         if (not dist.is_initialized() or dist.get_rank() == 0) and (batch_idx + 1) % 10 == 0:
-            logger.info(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f} | Perplexity: {perplexity:.4f}")
+            if logger:
+                logger.info(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f} | Perplexity: {perplexity:.4f}")
+            else:
+                print(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f} | Perplexity: {perplexity:.4f}")
 
         reset_pc_modules(model)
         cleanup_memory()
@@ -149,10 +152,6 @@ def main():
         root_logger.addHandler(file_h)
 
     logger = logging.getLogger(__name__)
-    
-    if rank == 0:
-        logger.info(f"\n{'#' * 120}") 
-        logger.info(f"Using device: {device} (local rank {local_rank})")
    
     config = GPTConfig(
         vocab_size = vocab_size,
@@ -176,15 +175,24 @@ def main():
         combined_output_weight=0.3,
         use_flash_attention=True  
     )
-    # record the model hyperparameters configurations
+    
+    # Create a separate logger for hyperparameters
+    param_logger = logging.getLogger('param_logger')
+    param_logger.setLevel(logging.INFO)
+    if rank == 0 and root_logger.handlers:
+        param_logger.addHandler(root_logger.handlers[1])
+        param_logger.propagate = False
+
     if rank == 0:
-        logger.info("Saving the hyperparameters configurations:")
+        param_logger.info(f"\n{'#' * 120}") 
+        logger.info(f"Using device: {device} (local rank {local_rank})")
         try:
             cfg = config.__dict__
         except Exception:
             cfg = {k: getattr(config, k) for k in dir(config) if not k.startswith("_") and not callable(getattr(config, k))}
         config_json = json.dumps(cfg, indent=6, default=str)
-        logger.info(config_json)
+        param_logger.info("Saving the hyperparameters configurations:")
+        param_logger.info(config_json)
 
     model = PCTransformer(config).to(device)
     if use_ddp:
