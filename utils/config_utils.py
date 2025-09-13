@@ -37,17 +37,15 @@ def load_best_config():
                 key, value = match.groups()
                 if key in selected_keys:
                     try:
-                        # Convert booleans
+                        num = float(value)
+                        config[key] = int(num) if num.is_integer() else num
+                    except ValueError:
+                        # Handle booleans
                         if value.lower() in {"true", "false"}:
                             config[key] = value.lower() == "true"
-                        # Convert numeric types
-                        elif '.' in value:
-                            config[key] = float(value)
                         else:
-                            config[key] = int(value)
-                    except ValueError:
-                        # Handle string values
-                        config[key] = value.strip('"').strip("'")
+                            # Keep as string
+                            config[key] = value.strip('"').strip("'")
     else:
         print(f"[WARNING] Tuning result file not found: {file_path}")
         print(f"[INFO] Using fallback values for missing keys: {selected_keys - config.keys()}")
