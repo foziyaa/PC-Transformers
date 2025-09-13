@@ -23,13 +23,15 @@ networkx==3.4.2
 sympy==1.13.1
 tqdm==4.67.1
 typing_extensions==4.13.1
-tokenizers==0.21.1
+tokenizers==0.20.3
 matplotlib==3.10.3
 nltk==3.9.1
 bert-score==0.3.13
 optuna
 psutil==7.0.0
 torch==2.5.0
+numpy
+transformers==4.45.2
 EOF
 fi
 

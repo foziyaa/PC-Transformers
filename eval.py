@@ -8,6 +8,7 @@ from predictive_coding.pc_layer import PCLayer
 from Data_preprocessing.dataloader import get_loaders
 import torch.nn.functional as F
 from utils.model_utils import load_tokenizer, load_model, reset_pc_modules
+from utils.config_utils import load_best_config
 from utils.pc_utils import cleanup_memory
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
@@ -127,24 +128,25 @@ def main():
     tokenizer = load_tokenizer()
     vocab_size = len(tokenizer)
     
+    best_config = load_best_config()
+    
     config = GPTConfig(
         vocab_size = vocab_size,
-        block_size=448,
-        n_embed= 592,
-        dropout= 0.24684719512514441,
-        local_learning_rate= 1e-5,
-        T=7,
-        is_holding_error=True,
-        num_heads= 16,
-        n_blocks=6,
-        num_epochs=1,
-        update_bias=False,
-        internal_energy_fn_name="pc_e", 
+        block_size = best_config["block_size"],
+        n_embed = best_config["n_embed"],
+        dropout = best_config["dropout"],
+        local_learning_rate = best_config["peak_learning_rate"],
+        T = best_config["T"],
+        is_holding_error = True,
+        num_heads = best_config["num_heads"],
+        n_blocks = best_config["n_blocks"],
+        num_epochs = 1,
+        internal_energy_fn_name="pc_e",
         output_energy_fn_name="pc_e",
         eos_token_id = tokenizer.eos_token_id,
         combined_internal_weight=0.3,
         combined_output_weight=0.7,
-        use_flash_attention=True
+        update_bias = best_config["update_bias"]        
     )
   
     model_path = "checkpoints/final_model.pt"
