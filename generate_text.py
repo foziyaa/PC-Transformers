@@ -114,7 +114,7 @@ def main():
         n_blocks = best_config["n_blocks"],
         num_epochs = 1,
         internal_energy_fn_name="pc_e",
-        output_energy_fn_name="kld",
+        output_energy_fn_name="pc_e",
         update_bias = best_config["update_bias"],
         eos_token_id = tokenizer.eos_token_id
     )

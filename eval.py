@@ -142,7 +142,7 @@ def main():
         n_blocks = best_config["n_blocks"],
         num_epochs = 1,
         internal_energy_fn_name="pc_e",
-        output_energy_fn_name="kld",
+        output_energy_fn_name="pc_e",
         eos_token_id = tokenizer.eos_token_id,
         combined_internal_weight=0.3,
         combined_output_weight=0.7,
