@@ -20,13 +20,12 @@ from utils.device_utils import setup_device, cleanup_memory
 import json
 import logging
 
-"""
-This script trains the predictive coding transformer model on the provided dataset.
-It tracks and plots the average predictive coding energy per epoch and saves the trained model.
-
-Usage: torchrun --nproc-per-node=<NUM_GPU> training.py
-
-"""
+def safe_exp(x):
+    """Safely compute exp, handling large values"""
+    try:
+        return math.exp(x) if x < 100 else float('inf')
+    except (OverflowError, ValueError):
+        return float('inf')
 
 def train(model, dataloader, tokenizer, config, global_step, device, logger):
     model.train()
@@ -42,29 +41,29 @@ def train(model, dataloader, tokenizer, config, global_step, device, logger):
     alpha = getattr(config, 'combined_internal_weight', 0.3)
     beta = getattr(config, 'combined_output_weight', 0.7)
     
-
     for batch_idx, batch in enumerate(dataloader):
         input_ids = batch["input_ids"].to(device)
         target_ids = batch["target_ids"].to(device)
 
+        # Clamp target IDs only once
         if target_ids.max() >= vocab_size:
             target_ids = torch.clamp(target_ids, max=vocab_size - 1)
 
+        # Learning rate warmup
         if global_step < config.warmup_steps:
             lr = config.local_learning_rate + global_step / config.warmup_steps * (
                 config.peak_learning_rate - config.local_learning_rate)
         else:
             lr = config.peak_learning_rate
 
+        # Set learning rate for all modules
         for module in model.modules():
             if hasattr(module, 'local_lr'):
                 module.set_learning_rate(lr)
                 
         global_step += 1
-        if target_ids.max() >= vocab_size:
-            target_ids = torch.clamp(target_ids, max=vocab_size-1)
             
-            
+        # Forward pass
         logits = model(target_ids, input_ids)
         ce_loss = F.cross_entropy(
             logits.view(-1, logits.size(-1)),
@@ -73,13 +72,21 @@ def train(model, dataloader, tokenizer, config, global_step, device, logger):
         )
         total_ce_loss += ce_loss.item()
 
+        # Energy calculation - ensure all tensors are on same device
         internal_energies = []
         output_energy = None
 
         for module in model.modules():
             if isinstance(module, PCLayer) and hasattr(module, "get_energy"):
                 energy = module.get_energy()
-                if energy is None or (isinstance(energy, float) and math.isnan(energy)):
+                if energy is None:
+                    continue
+                    
+                # Convert tensor to scalar if needed
+                if torch.is_tensor(energy):
+                    energy = energy.item()
+                
+                if math.isnan(energy):
                     continue
 
                 if hasattr(module, 'layer_type') and module.layer_type == 'linear_output':
@@ -90,38 +97,39 @@ def train(model, dataloader, tokenizer, config, global_step, device, logger):
                 else:
                     internal_energies.append(energy)
 
-                if hasattr(module, "_head_similarity_avg"):
-                    _ = module._head_similarity_avg
-                if hasattr(module, "_head_similarity_max"):
-                    _ = module._head_similarity_max
-
-        avg_internal_energy = sum(internal_energies) / len(internal_energies) if internal_energies else ce_loss.item()
-                
+        # Calculate batch energy
+        if internal_energies:
+            avg_internal_energy = sum(internal_energies) / len(internal_energies)
+        else:
+            avg_internal_energy = ce_loss.item()  # Fallback
+            
         if output_energy is not None:
-           avg_output_energy = output_energy
-           batch_energy = alpha * avg_internal_energy + beta* avg_output_energy 
+            batch_energy = alpha * avg_internal_energy + beta * output_energy 
         else:
             batch_energy = avg_internal_energy
+            
         total_energy += batch_energy
         batch_count += 1
 
-        perplexity = math.exp(ce_loss.item()) if ce_loss.item() < 100 else float("inf")
+        # Safe perplexity calculation
+        perplexity = safe_exp(ce_loss.item())
 
         if (not dist.is_initialized() or dist.get_rank() == 0) and (batch_idx + 1) % 10 == 0:
+            log_msg = f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f} | Perplexity: {perplexity:.4f}"
             if logger:
-                logger.info(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f} | Perplexity: {perplexity:.4f}")
+                logger.info(log_msg)
             else:
-                print(f"  Batch {batch_idx + 1}/{len(dataloader)} | Batch Energy: {batch_energy:.4f} | Perplexity: {perplexity:.4f}")
+                print(log_msg)
 
         reset_pc_modules(model)
         cleanup_memory()
     
-
+    # Calculate epoch averages
     avg_energy = total_energy / batch_count if batch_count > 0 else 0.0
     avg_ce_loss = total_ce_loss / batch_count if batch_count > 0 else 0.0
-    avg_perplexity = math.exp(avg_ce_loss) if avg_ce_loss < 100 else float("inf")
+    avg_perplexity = safe_exp(avg_ce_loss)
+    
     return avg_energy, avg_perplexity, global_step
-
 
 def main():
     local_rank, device, use_ddp = setup_device()
@@ -282,4 +290,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
