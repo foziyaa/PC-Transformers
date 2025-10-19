@@ -159,8 +159,8 @@ def main():
         vocab_size = vocab_size,
 
         block_size = best_config["block_size"],
-        peak_learning_rate = best_config["peak_learning_rate"],
-        warmup_steps = best_config["warmup_steps"],
+        peak_learning_rate = 5e-4 ,
+        warmup_steps = 1000 ,
         n_embed = best_config["n_embed"],
         dropout = best_config["dropout"],
         local_learning_rate = 1e-5,
@@ -282,3 +282,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
