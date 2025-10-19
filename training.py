@@ -20,9 +20,9 @@ from utils.device_utils import setup_device
 import json
 import logging
 
-TOKENIZER_PATH = "/content/PC-Transformers/Data_preprocessing/tokenizer/outputs/gpt2_tokenizer_ptb.json"
-LOG_DIR = "/content/PC-Transformers/logs"
-CHECKPOINT_DIR = "/content/PC-Transformers/checkpoints"
+TOKENIZER_PATH = "/PC-Transformers/Data_preprocessing/tokenizer/outputs/gpt2_tokenizer_ptb.json"
+LOG_DIR = "/PC-Transformers/logs"
+CHECKPOINT_DIR = "/PC-Transformers/checkpoints"
 
 def load_local_tokenizer(path):
     if not os.path.exists(path):
@@ -229,3 +229,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
